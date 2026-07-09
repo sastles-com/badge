@@ -3,9 +3,13 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 #include <WebServer.h>
+#include <uri/UriBraces.h>
 
 #include "app_state.h"
+#include "content_store.h"
 #include "net_manager.h"
+#include "web_ui.h"
+#include "web_upload.h"
 
 namespace web_server {
 namespace {
@@ -14,21 +18,7 @@ constexpr uint16_t kHttpPort = 80;
 
 WebServer g_server(kHttpPort);
 
-// P1 の仮トップページ(P2 で gzip 済み Web UI に差し替える)。
-const char kPlaceholderPage[] PROGMEM =
-    "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\">"
-    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-    "<title>M5Dial-Badge</title>"
-    "<style>body{font-family:sans-serif;margin:2em;line-height:1.6;color:#222}"
-    "h1{font-size:1.4em}code{background:#eee;padding:.1em .3em;border-radius:3px}"
-    "</style></head><body>"
-    "<h1>M5Dial-Badge</h1>"
-    "<p>接続できました。Web UI は準備中です(P2 で実装)。</p>"
-    "<p><a href=\"/api/status\">/api/status</a></p>"
-    "</body></html>";
-
 // 接続性チェック URL などに返す案内ページ。
-// キャプティブポータルの疑似ブラウザではなく、標準ブラウザで開くよう促す。
 const char kCaptivePage[] PROGMEM =
     "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\">"
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
@@ -41,10 +31,11 @@ const char kCaptivePage[] PROGMEM =
     "</body></html>";
 
 void handleRoot() {
-  g_server.send_P(200, "text/html; charset=utf-8", kPlaceholderPage);
+  g_server.sendHeader("Content-Encoding", "gzip");
+  g_server.send_P(200, "text/html; charset=utf-8",
+                  reinterpret_cast<const char*>(kWebUiHtml), kWebUiHtmlLen);
 }
 
-// OS の接続性チェック URL 用。案内ページを 200 で返す(疑似ブラウザ対策)。
 void handleCaptive() {
   g_server.send_P(200, "text/html; charset=utf-8", kCaptivePage);
 }
@@ -53,11 +44,6 @@ void handleStatus() {
   char ip[16];
   net_manager::ipString(ip, sizeof(ip));
 
-  const size_t total = LittleFS.totalBytes();
-  const size_t used = LittleFS.usedBytes();
-  const size_t freeBytes = (total > used) ? (total - used) : 0;
-  const int content_count = 0;  // P2 で content_store から取得する
-
   char json[256];
   snprintf(json, sizeof(json),
            "{\"fw\":\"%s\",\"mode\":\"%s\",\"ssid\":\"%s\",\"ip\":\"%s\","
@@ -65,14 +51,57 @@ void handleStatus() {
            kFwVersion,
            net_manager::mode() == WifiMode::AP ? "AP" : "STA",
            net_manager::ssid(), ip,
-           static_cast<unsigned>(total), static_cast<unsigned>(freeBytes),
-           content_count);
+           static_cast<unsigned>(content_store::totalBytes()),
+           static_cast<unsigned>(content_store::freeBytes()),
+           content_store::count());
   g_server.send(200, "application/json", json);
+}
+
+void handlePlaylist() {
+  // 大きめ(最大 ~6KB)なのでスタックではなく静的確保する。
+  static char json[content_store::kMaxItems * 96 + 64];
+  if (!content_store::toJson(json, sizeof(json))) {
+    g_server.send(500, "text/plain", "playlist too large");
+    return;
+  }
+  g_server.send(200, "application/json", json);
+}
+
+// サムネイル / 本体 JPEG のストリーミング配信。
+void streamJpeg(const char* path) {
+  if (!LittleFS.exists(path)) {
+    g_server.send(404, "text/plain", "not found");
+    return;
+  }
+  File f = LittleFS.open(path, "r");
+  if (!f) {
+    g_server.send(500, "text/plain", "open failed");
+    return;
+  }
+  g_server.streamFile(f, "image/jpeg");
+  f.close();
+}
+
+void handleThumb() {
+  char path[48];
+  content_store::thumbPath(g_server.pathArg(0).c_str(), path, sizeof(path));
+  streamJpeg(path);
+}
+
+void handleDelete() {
+  const String id = g_server.pathArg(0);
+  if (content_store::remove(id.c_str())) {
+    g_server.send(200, "text/plain", "deleted");
+  } else {
+    g_server.send(404, "text/plain", "not found");
+  }
 }
 
 }  // namespace
 
 void begin() {
+  web_upload::begin(&g_server);
+
   g_server.on("/", HTTP_GET, handleRoot);
 
   // OS のキャプティブポータル判定 URL。
@@ -84,8 +113,14 @@ void begin() {
   g_server.on("/connecttest.txt", HTTP_GET, handleCaptive);           // Windows
 
   g_server.on("/api/status", HTTP_GET, handleStatus);
+  g_server.on("/api/playlist", HTTP_GET, handlePlaylist);
+  g_server.on(UriBraces("/api/thumb/{}"), HTTP_GET, handleThumb);
+  g_server.on(UriBraces("/api/content/{}"), HTTP_DELETE, handleDelete);
 
-  // それ以外はすべて案内ページへ(DNS で自 IP に来た未知 URL を拾う)。
+  // アップロード(multipart チャンク)。
+  g_server.on("/api/upload", HTTP_POST, web_upload::handleFinish,
+              web_upload::handleChunk);
+
   g_server.onNotFound(handleCaptive);
 
   g_server.begin();

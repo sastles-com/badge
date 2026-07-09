@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>M5Dial-Badge</title>
+<style>
+  :root { --bg:#12141c; --card:#1c1f2b; --fg:#eef; --accent:#3ba0ff; --muted:#8b93a7; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Hiragino Kaku Gothic ProN",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.6; }
+  header { padding:16px; text-align:center; font-weight:700; font-size:1.2em;
+           border-bottom:1px solid #2a2e3c; }
+  main { padding:16px; max-width:520px; margin:0 auto; }
+  .card { background:var(--card); border-radius:14px; padding:16px; margin-bottom:16px; }
+  h2 { font-size:1em; margin:0 0 12px; color:var(--accent); }
+  .bar { height:10px; border-radius:5px; background:#2a2e3c; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:var(--accent); width:0; transition:width .3s; }
+  .cap { display:flex; justify-content:space-between; font-size:.85em; color:var(--muted); margin-top:6px; }
+  button { font:inherit; border:0; border-radius:10px; padding:12px 16px; background:var(--accent);
+           color:#fff; font-weight:700; cursor:pointer; }
+  button:disabled { opacity:.5; }
+  input[type=file] { width:100%; }
+  input[type=text] { width:100%; padding:10px; border-radius:10px; border:1px solid #2a2e3c;
+                     background:#0e0f16; color:var(--fg); font:inherit; }
+  label { display:block; font-size:.85em; color:var(--muted); margin:12px 0 4px; }
+  .previews { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; }
+  .pv { text-align:center; }
+  .pv canvas { width:96px; height:96px; border-radius:50%; background:#000;
+               border:2px solid #2a2e3c; }
+  .pv small { display:block; color:var(--muted); font-size:.75em; max-width:96px;
+              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #status { font-size:.9em; color:var(--muted); min-height:1.4em; margin-top:10px; }
+  .list-item { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #2a2e3c; }
+  .list-item img { width:44px; height:44px; border-radius:50%; background:#000; }
+  .list-item span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .empty { color:var(--muted); font-size:.9em; }
+</style>
+</head>
+<body>
+<header>M5Dial-Badge</header>
+<main>
+  <div class="card">
+    <h2>ストレージ</h2>
+    <div class="bar"><i id="capfill"></i></div>
+    <div class="cap"><span id="capused">-</span><span id="captotal">-</span></div>
+    <div class="cap"><span id="capcount">コンテンツ: - 件</span><span id="capmode">-</span></div>
+  </div>
+
+  <div class="card">
+    <h2>アップロード</h2>
+    <input type="file" id="file" accept="image/*" multiple>
+    <label for="name">名前(任意・空なら自動)</label>
+    <input type="text" id="name" placeholder="例: ロゴ">
+    <div class="previews" id="previews"></div>
+    <div style="margin-top:14px"><button id="send" disabled>アップロード</button></div>
+    <div id="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>保存済みコンテンツ</h2>
+    <div id="list"><div class="empty">読み込み中...</div></div>
+  </div>
+</main>
+
+<script>
+const IMG = 240, THUMB = 80, JPEG_Q = 0.8, THUMB_Q = 0.7;
+let picked = [];  // {blobFull, blobThumb, name}
+
+const $ = id => document.getElementById(id);
+const fmtKB = b => (b/1024).toFixed(0) + " KB";
+
+// 画像を正方形中央クロップして size×size の canvas に cover 描画。
+function cropTo(img, size) {
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const ctx = c.getContext("2d");
+  const s = Math.min(img.naturalWidth, img.naturalHeight);
+  const sx = (img.naturalWidth - s) / 2, sy = (img.naturalHeight - s) / 2;
+  ctx.drawImage(img, sx, sy, s, s, 0, 0, size, size);
+  return c;
+}
+const toBlob = (canvas, q) => new Promise(r => canvas.toBlob(r, "image/jpeg", q));
+const loadImg = file => new Promise((res, rej) => {
+  const img = new Image();
+  img.onload = () => res(img);
+  img.onerror = rej;
+  img.src = URL.createObjectURL(file);
+});
+
+async function onPick(files) {
+  picked = [];
+  $("previews").innerHTML = "";
+  for (const f of files) {
+    let img;
+    try { img = await loadImg(f); }
+    catch { continue; }
+    const full = cropTo(img, IMG), thumb = cropTo(img, THUMB);
+    const [blobFull, blobThumb] = await Promise.all([toBlob(full, JPEG_Q), toBlob(thumb, THUMB_Q)]);
+    picked.push({ blobFull, blobThumb, name: f.name.replace(/\.[^.]+$/, "") });
+
+    const pv = document.createElement("div");
+    pv.className = "pv";
+    const disp = cropTo(img, 192);       // プレビュー用(円形マスクは CSS)
+    disp.style.width = disp.style.height = "96px";
+    pv.appendChild(disp);
+    const cap = document.createElement("small");
+    cap.textContent = fmtKB(blobFull.size);
+    pv.appendChild(cap);
+    $("previews").appendChild(pv);
+  }
+  $("send").disabled = picked.length === 0;
+  $("status").textContent = picked.length ? `${picked.length} 件を変換しました` : "";
+}
+
+async function uploadOne(item, name) {
+  const fd = new FormData();
+  fd.append("image", item.blobFull, "image.jpg");
+  fd.append("thumb", item.blobThumb, "thumb.jpg");
+  const q = new URLSearchParams({ type: "image", name });
+  const res = await fetch("/api/upload?" + q.toString(), { method: "POST", body: fd });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function onSend() {
+  $("send").disabled = true;
+  const base = $("name").value.trim();
+  let ok = 0;
+  for (let i = 0; i < picked.length; i++) {
+    const name = base ? (picked.length > 1 ? `${base}${i+1}` : base) : picked[i].name;
+    $("status").textContent = `アップロード中 ${i+1}/${picked.length} ...`;
+    try { await uploadOne(picked[i], name); ok++; }
+    catch (e) { $("status").textContent = "エラー: " + e.message; $("send").disabled = false; return; }
+  }
+  $("status").textContent = `${ok} 件アップロード完了`;
+  picked = []; $("previews").innerHTML = ""; $("file").value = "";
+  await refresh();
+}
+
+async function refresh() {
+  try {
+    const st = await (await fetch("/api/status")).json();
+    const used = st.totalBytes - st.freeBytes;
+    $("capfill").style.width = (100 * used / st.totalBytes).toFixed(1) + "%";
+    $("capused").textContent = "使用 " + fmtKB(used);
+    $("captotal").textContent = "全体 " + fmtKB(st.totalBytes);
+    $("capcount").textContent = "コンテンツ: " + st.contentCount + " 件";
+    $("capmode").textContent = st.mode + " / " + st.ip;
+  } catch {}
+  try {
+    const pl = await (await fetch("/api/playlist")).json();
+    const list = $("list");
+    if (!pl.items || pl.items.length === 0) {
+      list.innerHTML = '<div class="empty">まだありません。写真をアップロードしてください。</div>';
+      return;
+    }
+    list.innerHTML = "";
+    for (const it of pl.items) {
+      const row = document.createElement("div");
+      row.className = "list-item";
+      row.innerHTML = `<img src="/api/thumb/${it.id}" alt=""><span>${it.name||it.id}</span>`
+                    + `<button data-id="${it.id}">削除</button>`;
+      list.appendChild(row);
+    }
+    list.querySelectorAll("button[data-id]").forEach(b =>
+      b.onclick = async () => {
+        await fetch("/api/content/" + b.dataset.id, { method: "DELETE" });
+        await refresh();
+      });
+  } catch {}
+}
+
+$("file").onchange = e => onPick(e.target.files);
+$("send").onclick = onSend;
+refresh();
+</script>
+</body>
+</html>

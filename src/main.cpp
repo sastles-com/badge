@@ -11,8 +11,10 @@
 #include <M5Dial.h>
 
 #include "app_state.h"
+#include "content_store.h"
 #include "input.h"
 #include "net_manager.h"
+#include "player.h"
 #include "ui_screens.h"
 #include "web_server.h"
 
@@ -57,7 +59,7 @@ void render() {
       break;
     case AppMode::SLIDESHOW:
     default:
-      ui_screens::drawSlideshowPlaceholder();
+      player::renderCurrent();
       break;
   }
   g_app.needs_redraw = false;
@@ -113,12 +115,14 @@ void setup() {
   Serial.begin(kSerialBaud);
   delay(200);
   Serial.println();
-  Serial.println("=== M5Dial-Badge P1 ===");
+  Serial.println("=== M5Dial-Badge P2 ===");
   Serial.printf("[SYS] free heap: %u bytes\n", ESP.getFreeHeap());
 
   M5Dial.Display.setBrightness(kBrightness);
 
   initLittleFs();
+  content_store::begin();
+  player::begin();
   net_manager::begin();
   web_server::begin();
   input::begin();
@@ -134,6 +138,12 @@ void loop() {
 
   const input::Events ev = input::poll();
   handleInput(ev);
+
+  // アップロード完了 → 新着コンテンツを表示(SLIDESHOW に戻して再描画)。
+  if (player::takePending()) {
+    g_app.mode = AppMode::SLIDESHOW;
+    g_app.needs_redraw = true;
+  }
 
   // STATUS 画面の自動復帰。
   if (g_app.mode == AppMode::STATUS && millis() >= g_app.status_until_ms) {
