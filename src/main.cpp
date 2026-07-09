@@ -21,6 +21,9 @@ constexpr int kBgColor = 0x0821;            // 濃紺(RGB565)
 constexpr int kAccentColor = 0x051F;        // 明るい青
 constexpr uint32_t kStatusIntervalMs = 1000;  // シリアルへの定期ステータス出力周期
 constexpr bool kFormatLittleFsOnFail = true;  // マウント失敗時に自動フォーマットするか
+constexpr const char* kLittleFsBasePath = "/littlefs";
+constexpr const char* kLittleFsPartitionLabel = "littlefs";  // partitions.csv の Name と一致させる
+constexpr uint8_t kLittleFsMaxOpenFiles = 10;
 
 // --- 状態 ---
 long g_last_encoder = 0;
@@ -70,7 +73,8 @@ void drawStorageLine() {
 
 // LittleFS をマウント(必要ならフォーマット)し、結果をシリアルに出す。
 void initLittleFs() {
-  g_littlefs_ok = LittleFS.begin(kFormatLittleFsOnFail);
+  g_littlefs_ok = LittleFS.begin(kFormatLittleFsOnFail, kLittleFsBasePath,
+                                 kLittleFsMaxOpenFiles, kLittleFsPartitionLabel);
   if (g_littlefs_ok) {
     Serial.printf("[FS] mounted: used=%u total=%u bytes\n",
                   static_cast<unsigned>(LittleFS.usedBytes()),
