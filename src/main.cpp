@@ -1,81 +1,43 @@
-// M5Dial-Badge P0: 開発基盤スケルトン
+// M5Dial-Badge P1: Wi-Fi + QR + Web 基盤
 //
-// 目的:
-//   1. M5Dial の初期化と "Hello Badge" 表示
-//   2. エンコーダ回転値 / タッチ座標 / BtnA イベントをシリアルに出力
-//   3. LittleFS のマウント確認(失敗時フォーマット)と空き容量表示
-//
-// この main.cpp は P0 のスケルトン。P1 以降で net_manager / web_server /
-// player / ui_screens 等に機能別分割していく(docs/IMPLEMENTATION.md §2)。
+// setup/loop と状態機械の統括のみをここに置く。各機能は分割モジュールへ:
+//   net_manager  SoftAP + DNS 全リダイレクト
+//   web_server   仮ページ / キャプティブポータル案内 / /api/status
+//   ui_screens   スライドショー仮画面 / 2 段階 QR / ステータス
+//   input        ダイヤル / タッチ / BtnA(短押し・長押し 2 秒)
 
 #include <Arduino.h>
 #include <LittleFS.h>
 #include <M5Dial.h>
 
+#include "app_state.h"
+#include "input.h"
+#include "net_manager.h"
+#include "ui_screens.h"
+#include "web_server.h"
+
 namespace {
 
-// --- 定数(マジックナンバーはここに集約) ---
+// --- 定数 ---
 constexpr uint32_t kSerialBaud = 115200;
-constexpr int kTextColorFg = TFT_WHITE;
-constexpr int kBgColor = 0x0821;            // 濃紺(RGB565)
-constexpr int kAccentColor = 0x051F;        // 明るい青
-constexpr uint32_t kStatusIntervalMs = 1000;  // シリアルへの定期ステータス出力周期
-constexpr bool kFormatLittleFsOnFail = true;  // マウント失敗時に自動フォーマットするか
+constexpr uint8_t kBrightness = 120;
+constexpr uint32_t kStatusHoldMs = 5000;   // STATUS 画面の自動復帰時間
+constexpr uint32_t kHeapLogIntervalMs = 5000;
+
+// LittleFS(P0 での知見: partitions.csv の Name と一致させる)
+constexpr bool kFormatLittleFsOnFail = true;
 constexpr const char* kLittleFsBasePath = "/littlefs";
-constexpr const char* kLittleFsPartitionLabel = "littlefs";  // partitions.csv の Name と一致させる
+constexpr const char* kLittleFsPartitionLabel = "littlefs";
 constexpr uint8_t kLittleFsMaxOpenFiles = 10;
 
 // --- 状態 ---
-long g_last_encoder = 0;
-uint32_t g_last_status_ms = 0;
-uint32_t g_btn_press_ms = 0;
-bool g_littlefs_ok = false;
+AppState g_app;
+uint32_t g_last_heap_log_ms = 0;
 
-// 画面中央に "Hello Badge" とサブテキストを描く(円形 240x240 の内接円内)。
-void drawSplash() {
-  auto& d = M5Dial.Display;
-  d.fillScreen(kBgColor);
-
-  // 装飾リング
-  d.drawCircle(120, 120, 116, kAccentColor);
-  d.drawCircle(120, 120, 112, kAccentColor);
-
-  d.setTextDatum(middle_center);
-  d.setTextColor(kTextColorFg, kBgColor);
-  d.setTextSize(1);
-  d.setFont(&fonts::Font4);
-  d.drawString("Hello Badge", 120, 96);
-
-  d.setFont(&fonts::Font2);
-  d.setTextColor(kAccentColor, kBgColor);
-  d.drawString("M5Dial-Badge P0", 120, 128);
-}
-
-// LittleFS の使用量 / 全体を画面下部に表示する。
-void drawStorageLine() {
-  auto& d = M5Dial.Display;
-  d.setFont(&fonts::Font2);
-  d.setTextDatum(middle_center);
-  d.setTextColor(kTextColorFg, kBgColor);
-
-  char line[48];
-  if (g_littlefs_ok) {
-    const size_t total = LittleFS.totalBytes();
-    const size_t used = LittleFS.usedBytes();
-    snprintf(line, sizeof(line), "FS %u/%u KB",
-             static_cast<unsigned>(used / 1024),
-             static_cast<unsigned>(total / 1024));
-  } else {
-    snprintf(line, sizeof(line), "FS mount FAILED");
-  }
-  d.drawString(line, 120, 156);
-}
-
-// LittleFS をマウント(必要ならフォーマット)し、結果をシリアルに出す。
 void initLittleFs() {
-  g_littlefs_ok = LittleFS.begin(kFormatLittleFsOnFail, kLittleFsBasePath,
+  const bool ok = LittleFS.begin(kFormatLittleFsOnFail, kLittleFsBasePath,
                                  kLittleFsMaxOpenFiles, kLittleFsPartitionLabel);
-  if (g_littlefs_ok) {
+  if (ok) {
     Serial.printf("[FS] mounted: used=%u total=%u bytes\n",
                   static_cast<unsigned>(LittleFS.usedBytes()),
                   static_cast<unsigned>(LittleFS.totalBytes()));
@@ -84,68 +46,108 @@ void initLittleFs() {
   }
 }
 
+// 現在のモードに応じて画面を描く。
+void render() {
+  switch (g_app.mode) {
+    case AppMode::QR:
+      ui_screens::drawQr(g_app.qr_page);
+      break;
+    case AppMode::STATUS:
+      ui_screens::drawStatus();
+      break;
+    case AppMode::SLIDESHOW:
+    default:
+      ui_screens::drawSlideshowPlaceholder();
+      break;
+  }
+  g_app.needs_redraw = false;
+}
+
+void enterMode(AppMode mode) {
+  g_app.mode = mode;
+  g_app.needs_redraw = true;
+}
+
+// 入力イベントに応じて状態遷移する。
+void handleInput(const input::Events& ev) {
+  switch (g_app.mode) {
+    case AppMode::SLIDESHOW:
+      if (ev.btn_long) {
+        g_app.qr_page = QrPage::WIFI;
+        enterMode(AppMode::QR);
+      } else if (ev.btn_short) {
+        g_app.status_until_ms = millis() + kStatusHoldMs;
+        enterMode(AppMode::STATUS);
+      }
+      break;
+
+    case AppMode::QR:
+      if (ev.btn_short) {
+        enterMode(AppMode::SLIDESHOW);
+      } else if (net_manager::mode() == WifiMode::AP &&
+                 (ev.encoder_delta != 0 || ev.touch_tap)) {
+        // AP 時のみ Wi-Fi QR ↔ URL QR を切り替え。
+        g_app.qr_page =
+            (g_app.qr_page == QrPage::WIFI) ? QrPage::URL : QrPage::WIFI;
+        g_app.needs_redraw = true;
+      }
+      break;
+
+    case AppMode::STATUS:
+      if (ev.btn_short || ev.btn_long) {
+        enterMode(AppMode::SLIDESHOW);
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
 }  // namespace
 
 void setup() {
   auto cfg = M5.config();
-  // M5Dial.begin(cfg, enableEncoder, enableRFID)
-  M5Dial.begin(cfg, true, false);
+  M5Dial.begin(cfg, true, false);  // enableEncoder=true, enableRFID=false
 
   Serial.begin(kSerialBaud);
   delay(200);
   Serial.println();
-  Serial.println("=== M5Dial-Badge P0 ===");
+  Serial.println("=== M5Dial-Badge P1 ===");
   Serial.printf("[SYS] free heap: %u bytes\n", ESP.getFreeHeap());
 
-  M5Dial.Display.setBrightness(120);
-  drawSplash();
+  M5Dial.Display.setBrightness(kBrightness);
 
   initLittleFs();
-  drawStorageLine();
+  net_manager::begin();
+  web_server::begin();
+  input::begin();
 
-  g_last_encoder = M5Dial.Encoder.read();
-  Serial.println("[IN] rotate dial / touch screen / press button to test");
+  render();
+  Serial.println("[SYS] ready");
 }
 
 void loop() {
   M5Dial.update();
+  net_manager::loop();
+  web_server::loop();
 
-  // --- エンコーダ回転 ---
-  const long enc = M5Dial.Encoder.read();
-  if (enc != g_last_encoder) {
-    Serial.printf("[ENC] value=%ld delta=%ld\n", enc, enc - g_last_encoder);
-    g_last_encoder = enc;
-    M5Dial.Speaker.tone(4000, 20);  // クリック音(P0 での動作確認用)
-  }
+  const input::Events ev = input::poll();
+  handleInput(ev);
 
-  // --- タッチ ---
-  auto t = M5Dial.Touch.getDetail();
-  if (t.wasPressed()) {
-    Serial.printf("[TOUCH] pressed x=%d y=%d\n", t.x, t.y);
-  }
-  if (t.wasReleased()) {
-    Serial.printf("[TOUCH] released x=%d y=%d\n", t.x, t.y);
+  // STATUS 画面の自動復帰。
+  if (g_app.mode == AppMode::STATUS && millis() >= g_app.status_until_ms) {
+    enterMode(AppMode::SLIDESHOW);
   }
 
-  // --- BtnA(ダイヤル押し込み) ---
-  if (M5Dial.BtnA.wasPressed()) {
-    g_btn_press_ms = millis();
-    Serial.println("[BTN] BtnA pressed");
-  }
-  if (M5Dial.BtnA.wasReleased()) {
-    Serial.printf("[BTN] BtnA released (held %lu ms)\n",
-                  static_cast<unsigned long>(millis() - g_btn_press_ms));
-  }
-  if (M5Dial.BtnA.pressedFor(2000)) {
-    Serial.println("[BTN] BtnA long-press (>=2s)");
+  if (g_app.needs_redraw) {
+    render();
   }
 
-  // --- 定期ステータス(ヒープ監視) ---
   const uint32_t now = millis();
-  if (now - g_last_status_ms >= kStatusIntervalMs) {
-    g_last_status_ms = now;
+  if (now - g_last_heap_log_ms >= kHeapLogIntervalMs) {
+    g_last_heap_log_ms = now;
     Serial.printf("[SYS] uptime=%lus heap=%u\n",
-                  static_cast<unsigned long>(now / 1000),
-                  ESP.getFreeHeap());
+                  static_cast<unsigned long>(now / 1000), ESP.getFreeHeap());
   }
 }
