@@ -16,6 +16,7 @@
 #include "net_manager.h"
 #include "player.h"
 #include "ui_screens.h"
+#include "video_bench.h"
 #include "web_server.h"
 
 namespace {
@@ -80,6 +81,10 @@ void handleInput(const input::Events& ev) {
       } else if (ev.btn_short) {
         g_app.status_until_ms = millis() + kStatusHoldMs;
         enterMode(AppMode::STATUS);
+      } else if (ev.encoder_delta != 0) {
+        player::navigate(ev.encoder_delta);  // ダイヤルで次/前へ(手動モード)
+      } else if (ev.touch_tap) {
+        player::togglePause();               // タップで一時停止/再開
       }
       break;
 
@@ -115,7 +120,7 @@ void setup() {
   Serial.begin(kSerialBaud);
   delay(200);
   Serial.println();
-  Serial.println("=== M5Dial-Badge P2 ===");
+  Serial.println("=== M5Dial-Badge P3 ===");
   Serial.printf("[SYS] free heap: %u bytes\n", ESP.getFreeHeap());
 
   M5Dial.Display.setBrightness(kBrightness);
@@ -123,6 +128,7 @@ void setup() {
   initLittleFs();
   content_store::begin();
   player::begin();
+  video_bench::runIfPresent();  // /bench.mjpg があれば fps 計測(P4 ベンチ)
   net_manager::begin();
   web_server::begin();
   input::begin();
@@ -139,7 +145,13 @@ void loop() {
   const input::Events ev = input::poll();
   handleInput(ev);
 
-  // アップロード完了 → 新着コンテンツを表示(SLIDESHOW に戻して再描画)。
+  // スライドショー中は巡回タイミングを進める。
+  if (g_app.mode == AppMode::SLIDESHOW) {
+    player::update();
+  }
+
+  // 自動送り / 手動操作 / アップロード完了などで再描画要求が立ったら反映。
+  // 新着(アップロード)は QR/STATUS 中でも SLIDESHOW に引き戻す。
   if (player::takePending()) {
     g_app.mode = AppMode::SLIDESHOW;
     g_app.needs_redraw = true;

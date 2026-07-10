@@ -9,8 +9,11 @@
 
 namespace ui_screens {
 
-// スライドショー仮画面(P2 まではロゴ + 操作案内)。
+// スライドショー仮画面(ロゴ + 操作案内)。
 void drawSlideshowPlaceholder();
+
+// 空状態画面: 組み込みデフォルト画像 + 「QR で画像を送ってね」案内。
+void drawEmptyState();
 
 // QR 画面。AP モードでは page に応じて Wi-Fi QR / URL QR を描く。
 void drawQr(QrPage page);

@@ -2,3 +2,6 @@
 .vscode/
 .DS_Store
 __pycache__/
+
+# ベンチ/検証用に生成する LittleFS データ(tools/mjpg_tool.py で再生成可能)
+data/*.mjpg

@@ -8,6 +8,7 @@
 #include "app_state.h"
 #include "content_store.h"
 #include "net_manager.h"
+#include "player.h"
 #include "web_ui.h"
 #include "web_upload.h"
 
@@ -91,7 +92,42 @@ void handleThumb() {
 void handleDelete() {
   const String id = g_server.pathArg(0);
   if (content_store::remove(id.c_str())) {
+    player::requestRedraw();
     g_server.send(200, "text/plain", "deleted");
+  } else {
+    g_server.send(404, "text/plain", "not found");
+  }
+}
+
+// /api/playlist POST: 並び順・duration_s・loops を更新。
+void handlePlaylistPost() {
+  if (!g_server.hasArg("plain")) {
+    g_server.send(400, "text/plain", "empty body");
+    return;
+  }
+  const String& body = g_server.arg("plain");
+  if (content_store::applyPlaylistJson(body.c_str(), body.length())) {
+    player::requestRedraw();
+    g_server.send(200, "text/plain", "updated");
+  } else {
+    g_server.send(400, "text/plain", "invalid playlist");
+  }
+}
+
+// /api/clear: 全コンテンツを削除。
+void handleClear() {
+  const int removed = content_store::clearAll();
+  player::requestRedraw();
+  char json[48];
+  snprintf(json, sizeof(json), "{\"removed\":%d}", removed);
+  g_server.send(200, "application/json", json);
+}
+
+// /api/show/<id>: 指定コンテンツへ即ジャンプ。
+void handleShow() {
+  const String id = g_server.pathArg(0);
+  if (player::showById(id.c_str())) {
+    g_server.send(200, "text/plain", "ok");
   } else {
     g_server.send(404, "text/plain", "not found");
   }
@@ -114,8 +150,11 @@ void begin() {
 
   g_server.on("/api/status", HTTP_GET, handleStatus);
   g_server.on("/api/playlist", HTTP_GET, handlePlaylist);
+  g_server.on("/api/playlist", HTTP_POST, handlePlaylistPost);
   g_server.on(UriBraces("/api/thumb/{}"), HTTP_GET, handleThumb);
   g_server.on(UriBraces("/api/content/{}"), HTTP_DELETE, handleDelete);
+  g_server.on("/api/clear", HTTP_POST, handleClear);
+  g_server.on(UriBraces("/api/show/{}"), HTTP_POST, handleShow);
 
   // アップロード(multipart チャンク)。
   g_server.on("/api/upload", HTTP_POST, web_upload::handleFinish,

@@ -3,6 +3,7 @@
 #include <LittleFS.h>
 #include <M5Dial.h>
 
+#include "builtin_image.h"
 #include "net_manager.h"
 
 namespace ui_screens {
@@ -42,6 +43,24 @@ void drawSlideshowPlaceholder() {
   d.drawString("BtnA 長押しで QR", kCx, 140);
   d.setTextColor(kFgColor, kBgColor);
   d.drawString("BtnA 短押しで情報", kCx, 162);
+}
+
+void drawEmptyState() {
+  auto& d = M5Dial.Display;
+  d.fillScreen(TFT_BLACK);
+  // 組み込みデフォルト画像(240x240 JPEG)を全画面表示。
+  if (!d.drawJpg(kBuiltinImage, kBuiltinImageLen, 0, 0)) {
+    d.fillScreen(kBgColor);
+  }
+
+  // 下部に案内を重ねる(円内に収まる位置に暗い帯)。
+  d.fillRect(0, 186, 240, 40, kBgColor);
+  setJpFont();
+  d.setTextDatum(middle_center);
+  d.setTextColor(kFgColor, kBgColor);
+  d.drawString("QR で画像を送ってね", kCx, 198);
+  d.setTextColor(kAccentColor, kBgColor);
+  d.drawString("BtnA 長押しで QR", kCx, 216);
 }
 
 void drawQr(QrPage page) {

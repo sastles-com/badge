@@ -150,6 +150,53 @@ bool remove(const char* id) {
   return true;
 }
 
+bool applyPlaylistJson(const char* body, size_t len) {
+  g_doc.clear();
+  DeserializationError err = deserializeJson(g_doc, body, len);
+  if (err) {
+    Serial.printf("[CS] playlist POST parse error: %s\n", err.c_str());
+    return false;
+  }
+
+  static Item new_items[kMaxItems];  // ~3KB。スタックを避けて静的確保。
+  int new_count = 0;
+  bool used[kMaxItems] = {false};
+
+  for (JsonObject o : g_doc["items"].as<JsonArray>()) {
+    const char* id = o["id"] | "";
+    const int idx = indexOf(id);
+    if (idx < 0 || used[idx] || new_count >= kMaxItems) continue;
+    used[idx] = true;
+    Item it = g_items[idx];
+    if (o.containsKey("duration_s")) it.duration_s = o["duration_s"] | it.duration_s;
+    if (o.containsKey("loops")) it.loops = o["loops"] | it.loops;
+    new_items[new_count++] = it;
+  }
+  // POST に含まれなかった既存項目は末尾に維持(削除は DELETE で行う)。
+  for (int i = 0; i < g_count; ++i) {
+    if (!used[i] && new_count < kMaxItems) new_items[new_count++] = g_items[i];
+  }
+
+  for (int i = 0; i < new_count; ++i) g_items[i] = new_items[i];
+  g_count = new_count;
+  save();
+  return true;
+}
+
+int clearAll() {
+  char path[48];
+  const int removed = g_count;
+  for (int i = 0; i < g_count; ++i) {
+    imagePath(g_items[i].id, path, sizeof(path));
+    if (LittleFS.exists(path)) LittleFS.remove(path);
+    thumbPath(g_items[i].id, path, sizeof(path));
+    if (LittleFS.exists(path)) LittleFS.remove(path);
+  }
+  g_count = 0;
+  save();
+  return removed;
+}
+
 void imagePath(const char* id, char* out, size_t out_size) {
   snprintf(out, out_size, "%s/%s.jpg", kContentDir, id);
 }

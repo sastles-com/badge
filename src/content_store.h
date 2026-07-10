@@ -38,6 +38,13 @@ bool addImage(const char* id, const char* name, uint16_t duration_s);
 // コンテンツを削除(実ファイル + プレイリストから除去)。
 bool remove(const char* id);
 
+// 全コンテンツを削除(実ファイル + プレイリストを空に)。削除件数を返す。
+int clearAll();
+
+// /api/playlist POST: 受信 JSON({"items":[{id,duration_s?,loops?},...]})に従って
+// 並び順と duration_s / loops を更新して保存する。POST に無い既存項目は末尾に残す。
+bool applyPlaylistJson(const char* body, size_t len);
+
 // パス生成: "/content/<id>.jpg" / ".thm"
 void imagePath(const char* id, char* out, size_t out_size);
 void thumbPath(const char* id, char* out, size_t out_size);
