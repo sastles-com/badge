@@ -35,6 +35,9 @@ bool generateId(char* out, size_t out_size);
 // 静止画をプレイリスト末尾に追加して保存する(実ファイルは web_upload が保存済み前提)。
 bool addImage(const char* id, const char* name, uint16_t duration_s);
 
+// 動画(MJPG)をプレイリスト末尾に追加して保存する。
+bool addVideo(const char* id, const char* name, uint8_t loops);
+
 // コンテンツを削除(実ファイル + プレイリストから除去)。
 bool remove(const char* id);
 
@@ -45,8 +48,9 @@ int clearAll();
 // 並び順と duration_s / loops を更新して保存する。POST に無い既存項目は末尾に残す。
 bool applyPlaylistJson(const char* body, size_t len);
 
-// パス生成: "/content/<id>.jpg" / ".thm"
+// パス生成: "/content/<id>.jpg" / ".mjp" / ".thm"
 void imagePath(const char* id, char* out, size_t out_size);
+void mjpgPath(const char* id, char* out, size_t out_size);
 void thumbPath(const char* id, char* out, size_t out_size);
 
 // 容量

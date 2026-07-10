@@ -16,7 +16,6 @@
 #include "net_manager.h"
 #include "player.h"
 #include "ui_screens.h"
-#include "video_bench.h"
 #include "web_server.h"
 
 namespace {
@@ -120,7 +119,7 @@ void setup() {
   Serial.begin(kSerialBaud);
   delay(200);
   Serial.println();
-  Serial.println("=== M5Dial-Badge P3 ===");
+  Serial.println("=== M5Dial-Badge P4 ===");
   Serial.printf("[SYS] free heap: %u bytes\n", ESP.getFreeHeap());
 
   M5Dial.Display.setBrightness(kBrightness);
@@ -128,7 +127,6 @@ void setup() {
   initLittleFs();
   content_store::begin();
   player::begin();
-  video_bench::runIfPresent();  // /bench.mjpg があれば fps 計測(P4 ベンチ)
   net_manager::begin();
   web_server::begin();
   input::begin();

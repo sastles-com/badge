@@ -42,6 +42,13 @@
   .arrows { display:flex; flex-direction:column; gap:2px; flex:none; }
   .arrows button { padding:2px 6px; line-height:1; }
   .empty { color:var(--muted); font-size:.9em; }
+  .vrow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:6px; }
+  .vrow label { margin:0; }
+  .vrow select, .vrow input { padding:8px; border-radius:8px; border:1px solid #2a2e3c;
+                              background:#0e0f16; color:var(--fg); font:inherit; }
+  .vrow input[type=number] { width:70px; }
+  .badge { font-size:.7em; background:var(--accent); color:#fff; border-radius:6px;
+           padding:1px 5px; }
 </style>
 </head>
 <body>
@@ -56,9 +63,28 @@
 
   <div class="card">
     <h2>アップロード</h2>
-    <input type="file" id="file" accept="image/*" multiple>
+    <input type="file" id="file" accept="image/*,video/*" multiple>
     <label for="name">名前(任意・空なら自動)</label>
     <input type="text" id="name" placeholder="例: ロゴ">
+
+    <div id="vidopts" style="display:none">
+      <label>動画の設定(選んだ動画に適用)</label>
+      <div class="vrow">
+        <label>fps</label>
+        <select id="fps"><option>5</option><option selected>10</option><option>15</option></select>
+        <label>画質</label>
+        <select id="quality">
+          <option value="0.5">低</option><option value="0.7" selected>中</option><option value="0.85">高</option>
+        </select>
+      </div>
+      <div class="vrow">
+        <label>開始位置(秒)</label>
+        <input id="start" type="number" min="0" value="0" step="0.5">
+        <label>ループ回数</label>
+        <input id="loops" type="number" min="1" value="1">
+      </div>
+    </div>
+
     <div class="previews" id="previews"></div>
     <div style="margin-top:14px"><button id="send" disabled>アップロード</button></div>
     <div id="status"></div>
@@ -75,76 +101,219 @@
 
 <script>
 const IMG = 240, THUMB = 80, JPEG_Q = 0.8, THUMB_Q = 0.7;
-let picked = [];  // {blobFull, blobThumb, name}
+let picked = [];  // 画像: {kind:'image', blobFull, blobThumb, name} / 動画: {kind:'video', file, name}
 
 const $ = id => document.getElementById(id);
 const fmtKB = b => (b/1024).toFixed(0) + " KB";
+const toBlob = (canvas, q) => new Promise(r => canvas.toBlob(r, "image/jpeg", q));
 
-// 画像を正方形中央クロップして size×size の canvas に cover 描画。
-function cropTo(img, size) {
+// 任意のソース(画像/動画フレーム)を正方形中央クロップして size の canvas に描く。
+function coverCanvas(src, sw, sh, size) {
   const c = document.createElement("canvas");
   c.width = c.height = size;
   const ctx = c.getContext("2d");
-  const s = Math.min(img.naturalWidth, img.naturalHeight);
-  const sx = (img.naturalWidth - s) / 2, sy = (img.naturalHeight - s) / 2;
-  ctx.drawImage(img, sx, sy, s, s, 0, 0, size, size);
+  const s = Math.min(sw, sh);
+  ctx.drawImage(src, (sw - s) / 2, (sh - s) / 2, s, s, 0, 0, size, size);
   return c;
 }
-const toBlob = (canvas, q) => new Promise(r => canvas.toBlob(r, "image/jpeg", q));
+
 const loadImg = file => new Promise((res, rej) => {
   const img = new Image();
   img.onload = () => res(img);
-  img.onerror = rej;
+  img.onerror = () => rej(new Error("画像を読み込めません"));
   img.src = URL.createObjectURL(file);
 });
+
+// 拡張子または MIME で動画かどうか判定(type が空のファイル対策)。
+const isVideoFile = f =>
+  (f.type && f.type.startsWith("video/")) || /\.(mp4|mov|m4v|webm|3gp|avi|mkv)$/i.test(f.name);
+
+// 動画を読み込む。再生不可(HEIC/HEVC 等)/ 読み込み遅延は例外。
+function loadVideo(file) {
+  return new Promise((res, rej) => {
+    const v = document.createElement("video");
+    v.muted = true; v.playsInline = true; v.preload = "auto";
+    let done = false;
+    const ok = () => { if (!done) { done = true; res(v); } };
+    v.onloadedmetadata = ok;
+    v.onloadeddata = ok;
+    v.onerror = () => { if (!done) { done = true; rej(new Error("この動画は再生できません(HEIC/HEVC など未対応の可能性)")); } };
+    setTimeout(() => { if (!done) { done = true; rej(new Error("動画の読み込みがタイムアウトしました")); } }, 8000);
+    v.src = URL.createObjectURL(file);
+    v.load();
+  });
+}
+const seek = (v, t) => new Promise((res, rej) => {
+  v.onseeked = () => res();
+  v.onerror = () => rej(new Error("シークに失敗しました"));
+  v.currentTime = t;
+});
+
+// 動画の先頭フレームからプレビュー用 canvas を作る(失敗しても null)。
+async function makeVideoThumb(file, size) {
+  try {
+    const v = await loadVideo(file);
+    await seek(v, 0);
+    return coverCanvas(v, v.videoWidth, v.videoHeight, size);
+  } catch { return null; }
+}
+
+// プレビュー枠(canvas + キャプション)を作って返す。
+function addPreviewCard(previewCanvas, captionHtml) {
+  const pv = document.createElement("div");
+  pv.className = "pv";
+  previewCanvas.style.width = previewCanvas.style.height = "96px";
+  pv.appendChild(previewCanvas);
+  const cap = document.createElement("small");
+  cap.innerHTML = captionHtml;
+  pv.appendChild(cap);
+  $("previews").appendChild(pv);
+  return pv;
+}
+
+function placeholderCanvas(labelText) {
+  const c = document.createElement("canvas");
+  c.width = c.height = 192;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#0e0f16"; ctx.fillRect(0, 0, 192, 192);
+  ctx.fillStyle = "#3ba0ff"; ctx.font = "22px sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(labelText, 96, 96);
+  return c;
+}
 
 async function onPick(files) {
   picked = [];
   $("previews").innerHTML = "";
-  for (const f of files) {
-    let img;
-    try { img = await loadImg(f); }
-    catch { continue; }
-    const full = cropTo(img, IMG), thumb = cropTo(img, THUMB);
-    const [blobFull, blobThumb] = await Promise.all([toBlob(full, JPEG_Q), toBlob(thumb, THUMB_Q)]);
-    picked.push({ blobFull, blobThumb, name: f.name.replace(/\.[^.]+$/, "") });
+  let hasVideo = false;
 
-    const pv = document.createElement("div");
-    pv.className = "pv";
-    const disp = cropTo(img, 192);       // プレビュー用(円形マスクは CSS)
-    disp.style.width = disp.style.height = "96px";
-    pv.appendChild(disp);
-    const cap = document.createElement("small");
-    cap.textContent = fmtKB(blobFull.size);
-    pv.appendChild(cap);
-    $("previews").appendChild(pv);
+  for (const f of files) {
+    const name = f.name.replace(/\.[^.]+$/, "");
+    if (isVideoFile(f)) {
+      hasVideo = true;
+      // 動画は選択時点で即リストへ(重い変換はアップロード時に実施)。
+      picked.push({ kind: "video", file: f, name });
+      const pv = addPreviewCard(placeholderCanvas("動画"),
+        `<span class="badge">動画</span> ${name}`);
+      // プレビューは非同期・ベストエフォート(失敗してもボタンは有効のまま)。
+      makeVideoThumb(f, 192).then(canvas => {
+        if (canvas) { canvas.style.width = canvas.style.height = "96px"; pv.replaceChild(canvas, pv.firstChild); }
+      });
+    } else {
+      let img;
+      try { img = await loadImg(f); } catch { continue; }
+      const full = coverCanvas(img, img.naturalWidth, img.naturalHeight, IMG);
+      const thumb = coverCanvas(img, img.naturalWidth, img.naturalHeight, THUMB);
+      const [blobFull, blobThumb] = await Promise.all([toBlob(full, JPEG_Q), toBlob(thumb, THUMB_Q)]);
+      picked.push({ kind: "image", blobFull, blobThumb, name });
+      const disp = coverCanvas(img, img.naturalWidth, img.naturalHeight, 192);
+      addPreviewCard(disp, fmtKB(blobFull.size));
+    }
   }
+
+  $("vidopts").style.display = hasVideo ? "" : "none";
   $("send").disabled = picked.length === 0;
-  $("status").textContent = picked.length ? `${picked.length} 件を変換しました` : "";
+  $("status").textContent = picked.length ? `${picked.length} 件を選択しました` : "";
 }
 
-async function uploadOne(item, name) {
+// 動画をフレームキャプチャして MJPG コンテナ(Blob)とサムネイルに変換。
+async function convertVideo(file, opts, onProgress) {
+  const v = await loadVideo(file);
+  await new Promise(res => { if (v.readyState >= 1) res(); else v.onloadedmetadata = res; });
+
+  const start = Math.min(opts.start, Math.max(0, v.duration - 0.1));
+  const want = Math.max(1, Math.floor((v.duration - start) * opts.fps));
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = IMG;
+  const ctx = canvas.getContext("2d");
+
+  const frames = [];
+  let total = 12;  // ヘッダ分
+  let truncated = false;
+  for (let i = 0; i < want; i++) {
+    await seek(v, start + i / opts.fps);
+    const s = Math.min(v.videoWidth, v.videoHeight);
+    ctx.drawImage(v, (v.videoWidth - s) / 2, (v.videoHeight - s) / 2, s, s, 0, 0, IMG, IMG);
+    const blob = await toBlob(canvas, opts.quality);
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    if (total + 4 + buf.length > opts.budget) { truncated = true; break; }
+    frames.push(buf);
+    total += 4 + buf.length;
+    if (onProgress) onProgress(i + 1, want, total);
+  }
+  if (frames.length === 0) throw new Error("フレームを取得できませんでした");
+
+  // サムネイル(先頭フレーム)
+  await seek(v, start);
+  const s = Math.min(v.videoWidth, v.videoHeight);
+  const tctx = (() => { const c = document.createElement("canvas"); c.width = c.height = THUMB; return c.getContext("2d"); })();
+  tctx.drawImage(v, (v.videoWidth - s) / 2, (v.videoHeight - s) / 2, s, s, 0, 0, THUMB, THUMB);
+  const thumbBlob = await toBlob(tctx.canvas, THUMB_Q);
+
+  // MJPG コンテナ組み立て(リトルエンディアン)
+  const ab = new ArrayBuffer(total);
+  const dv = new DataView(ab), u8 = new Uint8Array(ab);
+  u8[0] = 0x4d; u8[1] = 0x4a; u8[2] = 0x50; u8[3] = 0x47;  // "MJPG"
+  dv.setUint8(4, 1); dv.setUint8(5, opts.fps);
+  dv.setUint16(6, frames.length, true); dv.setUint32(8, 0, true);
+  let off = 12;
+  for (const fr of frames) { dv.setUint32(off, fr.length, true); off += 4; u8.set(fr, off); off += fr.length; }
+
+  return { mjpg: new Blob([ab], { type: "application/octet-stream" }),
+           thumb: thumbBlob, frames: frames.length, bytes: total, truncated };
+}
+
+async function uploadImage(item, name) {
   const fd = new FormData();
   fd.append("image", item.blobFull, "image.jpg");
   fd.append("thumb", item.blobThumb, "thumb.jpg");
   const q = new URLSearchParams({ type: "image", name });
-  const res = await fetch("/api/upload?" + q.toString(), { method: "POST", body: fd });
+  const res = await fetch("/api/upload?" + q, { method: "POST", body: fd });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+}
+
+async function uploadVideo(item, name, opts) {
+  const conv = await convertVideo(item.file, opts,
+    (i, n, bytes) => $("status").textContent = `変換中 ${name}: ${i}/${n} フレーム (${fmtKB(bytes)})`);
+  $("status").textContent = `アップロード中 ${name}: ${conv.frames}フレーム ${fmtKB(conv.bytes)}`
+    + (conv.truncated ? "(容量上限で一部カット)" : "");
+  const fd = new FormData();
+  fd.append("video", conv.mjpg, "v.mjp");
+  fd.append("thumb", conv.thumb, "thumb.jpg");
+  const q = new URLSearchParams({ type: "video", name, loops: opts.loops, fps: opts.fps });
+  const res = await fetch("/api/upload?" + q, { method: "POST", body: fd });
+  if (!res.ok) throw new Error(await res.text());
 }
 
 async function onSend() {
   $("send").disabled = true;
   const base = $("name").value.trim();
+
+  // 動画の空き容量予算(現在の空きの 90%)
+  let budget = 1 << 20;
+  try { const st = await (await fetch("/api/status")).json(); budget = Math.floor(st.freeBytes * 0.9); } catch {}
+  const vopts = {
+    fps: parseInt($("fps").value), quality: parseFloat($("quality").value),
+    start: parseFloat($("start").value) || 0, loops: parseInt($("loops").value) || 1,
+    budget,
+  };
+
   let ok = 0;
   for (let i = 0; i < picked.length; i++) {
-    const name = base ? (picked.length > 1 ? `${base}${i+1}` : base) : picked[i].name;
-    $("status").textContent = `アップロード中 ${i+1}/${picked.length} ...`;
-    try { await uploadOne(picked[i], name); ok++; }
-    catch (e) { $("status").textContent = "エラー: " + e.message; $("send").disabled = false; return; }
+    const it = picked[i];
+    const name = base ? (picked.length > 1 ? `${base}${i+1}` : base) : it.name;
+    try {
+      if (it.kind === "video") await uploadVideo(it, name, vopts);
+      else { $("status").textContent = `アップロード中 ${i+1}/${picked.length} ...`; await uploadImage(it, name); }
+      ok++;
+    } catch (e) {
+      $("status").textContent = "エラー: " + e.message;
+      $("send").disabled = false;
+      return;
+    }
   }
   $("status").textContent = `${ok} 件アップロード完了`;
-  picked = []; $("previews").innerHTML = ""; $("file").value = "";
+  picked = []; $("previews").innerHTML = ""; $("file").value = ""; $("vidopts").style.display = "none";
   await refresh();
 }
 

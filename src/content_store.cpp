@@ -134,16 +134,40 @@ bool addImage(const char* id, const char* name, uint16_t duration_s) {
   return true;
 }
 
+bool addVideo(const char* id, const char* name, uint8_t loops) {
+  if (g_count >= kMaxItems) {
+    Serial.println("[CS] addVideo: playlist full");
+    return false;
+  }
+  if (indexOf(id) >= 0) return false;
+
+  Item& it = g_items[g_count];
+  strlcpy(it.id, id, sizeof(it.id));
+  strlcpy(it.type, "video", sizeof(it.type));
+  strlcpy(it.name, (name && name[0]) ? name : id, sizeof(it.name));
+  it.duration_s = 0;
+  it.loops = loops ? loops : 1;
+  g_count++;
+  save();
+  return true;
+}
+
+// id に紐づく実ファイル(.jpg / .mjp / .thm)をすべて削除する。
+void removeFiles(const char* id) {
+  char path[48];
+  imagePath(id, path, sizeof(path));
+  if (LittleFS.exists(path)) LittleFS.remove(path);
+  mjpgPath(id, path, sizeof(path));
+  if (LittleFS.exists(path)) LittleFS.remove(path);
+  thumbPath(id, path, sizeof(path));
+  if (LittleFS.exists(path)) LittleFS.remove(path);
+}
+
 bool remove(const char* id) {
   const int i = indexOf(id);
   if (i < 0) return false;
 
-  char path[48];
-  imagePath(id, path, sizeof(path));
-  if (LittleFS.exists(path)) LittleFS.remove(path);
-  thumbPath(id, path, sizeof(path));
-  if (LittleFS.exists(path)) LittleFS.remove(path);
-
+  removeFiles(id);
   for (int k = i; k < g_count - 1; ++k) g_items[k] = g_items[k + 1];
   g_count--;
   save();
@@ -189,6 +213,8 @@ int clearAll() {
   for (int i = 0; i < g_count; ++i) {
     imagePath(g_items[i].id, path, sizeof(path));
     if (LittleFS.exists(path)) LittleFS.remove(path);
+    mjpgPath(g_items[i].id, path, sizeof(path));
+    if (LittleFS.exists(path)) LittleFS.remove(path);
     thumbPath(g_items[i].id, path, sizeof(path));
     if (LittleFS.exists(path)) LittleFS.remove(path);
   }
@@ -199,6 +225,10 @@ int clearAll() {
 
 void imagePath(const char* id, char* out, size_t out_size) {
   snprintf(out, out_size, "%s/%s.jpg", kContentDir, id);
+}
+
+void mjpgPath(const char* id, char* out, size_t out_size) {
+  snprintf(out, out_size, "%s/%s.mjp", kContentDir, id);
 }
 
 void thumbPath(const char* id, char* out, size_t out_size) {
