@@ -21,4 +21,10 @@ void drawQr(QrPage page);
 // ステータス画面(モード / SSID / IP / 空き容量 / コンテンツ数)。
 void drawStatus();
 
+// アップロード中の進捗画面(received: 受信バイト、total: 分かれば総バイト、0 で不明)。
+void drawUploadProgress(size_t received, size_t total);
+
+// エラー画面(メッセージを数秒表示する想定。呼び出し側が制御)。
+void drawError(const char* message);
+
 }  // namespace ui_screens

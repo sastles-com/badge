@@ -177,6 +177,47 @@ pio device list
 
 ---
 
+## ファームウェアをバイナリにして配る / 書き込む
+
+「ソースを触らず、でき上がったファームウェアを書き込むだけ」で使いたい人向けです。
+
+### A. すでにあるバイナリを書き込む(いちばん簡単)
+
+リポジトリの [`dist/`](../dist/) に統合バイナリ `m5dial-badge-merged.bin` と
+書き込みスクリプトが入っています。書き込みツール(esptool)だけ用意すれば OK です。
+
+```bash
+# 書き込みツールを入れる
+python3 -m pip install --user esptool      # Windows は python -m pip ...
+
+# 書き込み(ポートは pio device list で確認)
+cd dist
+./flash.sh /dev/cu.usbmodem101             # 🍎 Mac / Linux
+flash.bat COM3                             # 🪟 Windows
+```
+
+詳しくは [dist/README.md](../dist/README.md) を参照してください。
+
+### B. 自分でビルドしてバイナリを作る
+
+```bash
+# 1) ビルドすると .pio/build/m5dial/ に各バイナリができる
+pio run -e m5dial
+
+# 2) 1 つの統合バイナリにまとめる(dist/ に出力)
+python3 -m esptool --chip esp32s3 merge_bin -o dist/m5dial-badge-merged.bin \
+  --flash_mode dio --flash_freq 80m --flash_size 8MB \
+  0x0     .pio/build/m5dial/bootloader.bin \
+  0x8000  .pio/build/m5dial/partitions.bin \
+  0xe000  ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
+  0x10000 .pio/build/m5dial/firmware.bin
+```
+
+> 統合バイナリは 1 ファイルで配れるので、受け取った人は上記 A の手順で書き込むだけです。
+> Claude Code に「配布用バイナリを作り直して」と頼めば代わりにやってくれます。
+
+---
+
 ## 変更を GitHub に反映する(コミット & プッシュ)
 
 動作を確認できたら、変更を記録して GitHub に送ります。これも Claude に頼めます:

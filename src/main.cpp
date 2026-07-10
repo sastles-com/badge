@@ -11,6 +11,7 @@
 #include <M5Dial.h>
 
 #include "app_state.h"
+#include "config_store.h"
 #include "content_store.h"
 #include "input.h"
 #include "net_manager.h"
@@ -22,7 +23,6 @@ namespace {
 
 // --- 定数 ---
 constexpr uint32_t kSerialBaud = 115200;
-constexpr uint8_t kBrightness = 120;
 constexpr uint32_t kStatusHoldMs = 5000;   // STATUS 画面の自動復帰時間
 constexpr uint32_t kHeapLogIntervalMs = 5000;
 
@@ -119,12 +119,11 @@ void setup() {
   Serial.begin(kSerialBaud);
   delay(200);
   Serial.println();
-  Serial.println("=== M5Dial-Badge P4 ===");
+  Serial.println("=== M5Dial-Badge P6 ===");
   Serial.printf("[SYS] free heap: %u bytes\n", ESP.getFreeHeap());
 
-  M5Dial.Display.setBrightness(kBrightness);
-
   initLittleFs();
+  config_store::begin();  // 明るさ等を読み込み・適用
   content_store::begin();
   player::begin();
   net_manager::begin();

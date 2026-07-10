@@ -3,6 +3,7 @@
 #include <LittleFS.h>
 #include <M5Dial.h>
 
+#include "config_store.h"
 #include "content_store.h"
 #include "mjpg_reader.h"
 #include "ui_screens.h"
@@ -191,7 +192,7 @@ void navigate(int delta) {
   g_manual_until_ms = millis() + kManualRevertMs;
   g_paused = false;
   g_pending = true;
-  M5Dial.Speaker.tone(kBeepFreq, kBeepMs);
+  if (config_store::buzzer()) M5Dial.Speaker.tone(kBeepFreq, kBeepMs);
 }
 
 void togglePause() {

@@ -4,6 +4,7 @@
 #include <M5Dial.h>
 
 #include "builtin_image.h"
+#include "content_store.h"
 #include "net_manager.h"
 
 namespace ui_screens {
@@ -126,8 +127,46 @@ void drawStatus() {
   snprintf(line, sizeof(line), "空き: %u KB", free_kb);
   d.drawString(line, kCx, 156);
 
-  snprintf(line, sizeof(line), "コンテンツ: %d 件", 0);  // P2 で実数に
+  snprintf(line, sizeof(line), "コンテンツ: %d 件", content_store::count());
   d.drawString(line, kCx, 180);
+}
+
+void drawUploadProgress(size_t received, size_t total) {
+  auto& d = M5Dial.Display;
+  d.fillScreen(kBgColor);
+  d.drawCircle(kCx, kCx, 116, kAccentColor);
+
+  setJpFont();
+  d.setTextDatum(middle_center);
+  d.setTextColor(kFgColor, kBgColor);
+  d.drawString("アップロード中", kCx, 96);
+
+  // 進捗バー(総サイズが分かるときのみ割合表示)
+  const int bx = 45, bw = 150, by = 128, bh = 14;
+  d.drawRect(bx, by, bw, bh, kAccentColor);
+  if (total > 0) {
+    int w = static_cast<int>((static_cast<uint64_t>(received) * (bw - 2)) / total);
+    if (w > bw - 2) w = bw - 2;
+    d.fillRect(bx + 1, by + 1, w, bh - 2, kAccentColor);
+  }
+
+  char line[32];
+  snprintf(line, sizeof(line), "%u KB", static_cast<unsigned>(received / 1024));
+  d.setTextColor(kFgColor, kBgColor);
+  d.drawString(line, kCx, 156);
+}
+
+void drawError(const char* message) {
+  auto& d = M5Dial.Display;
+  d.fillScreen(0x2000);  // 暗い赤系
+  d.drawCircle(kCx, kCx, 116, TFT_RED);
+
+  setJpFont();
+  d.setTextDatum(middle_center);
+  d.setTextColor(TFT_RED, 0x2000);
+  d.drawString("エラー", kCx, 96);
+  d.setTextColor(kFgColor, 0x2000);
+  d.drawString(message, kCx, 128);
 }
 
 }  // namespace ui_screens

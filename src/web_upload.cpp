@@ -3,14 +3,17 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 
+#include "config_store.h"
 #include "content_store.h"
 #include "player.h"
+#include "ui_screens.h"
 
 namespace web_upload {
 namespace {
 
 // 空き容量がこれを下回る状態でのアップロードは拒否する(断片化/満杯対策)。
 constexpr size_t kMinFreeBytes = 32 * 1024;
+constexpr uint32_t kProgressIntervalMs = 200;  // 進捗描画の間引き
 
 WebServer* s_server = nullptr;
 
@@ -21,6 +24,8 @@ bool s_failed = false;
 const char* s_error = "";
 size_t s_image_bytes = 0;
 size_t s_video_bytes = 0;
+size_t s_received = 0;           // このリクエストで受信した総バイト
+uint32_t s_last_progress_ms = 0;
 
 void tempImagePath(char* out, size_t n) { snprintf(out, n, "/content/%s.jpg", s_id); }
 void tempMjpgPath(char* out, size_t n) { snprintf(out, n, "/content/%s.mjp", s_id); }
@@ -60,6 +65,8 @@ void handleChunk() {
       s_error = "";
       s_image_bytes = 0;
       s_video_bytes = 0;
+      s_received = 0;
+      s_last_progress_ms = 0;
       if (content_store::freeBytes() < kMinFreeBytes) {
         fail("storage full");
         return;
@@ -93,6 +100,14 @@ void handleChunk() {
     }
     if (up.name == "video") s_video_bytes += w;
     else if (up.name != "thumb") s_image_bytes += w;
+    s_received += w;
+
+    // アップロード中はスライドショーを止め、進捗を表示(間引き描画)。
+    const uint32_t now = millis();
+    if (now - s_last_progress_ms >= kProgressIntervalMs) {
+      s_last_progress_ms = now;
+      ui_screens::drawUploadProgress(s_received, up.totalSize);
+    }
 
   } else if (up.status == UPLOAD_FILE_END) {
     if (s_file) s_file.close();
@@ -103,20 +118,23 @@ void handleChunk() {
   }
 }
 
+void finishReset() { s_id[0] = '\0'; }
+
 void handleFinish() {
   if (s_file) s_file.close();
 
   if (s_failed) {
     cleanup();
+    ui_screens::drawError(s_error);  // 端末にもエラー表示(容量不足など)
     s_server->send(400, "text/plain", s_error);
-    s_id[0] = '\0';
+    finishReset();
     return;
   }
 
   if (s_id[0] == '\0' || (s_image_bytes == 0 && s_video_bytes == 0)) {
     cleanup();
     s_server->send(400, "text/plain", "no content data");
-    s_id[0] = '\0';
+    finishReset();
     return;
   }
 
@@ -125,12 +143,12 @@ void handleFinish() {
   if (s_video_bytes > 0) {
     const uint8_t loops = s_server->hasArg("loops")
                               ? static_cast<uint8_t>(s_server->arg("loops").toInt())
-                              : 1;
+                              : config_store::defaultLoops();
     ok = content_store::addVideo(s_id, name.c_str(), loops);
     Serial.printf("[UP] stored VIDEO id=%s bytes=%u loops=%u name=%s\n", s_id,
                   static_cast<unsigned>(s_video_bytes), loops, name.c_str());
   } else {
-    ok = content_store::addImage(s_id, name.c_str(), 5);
+    ok = content_store::addImage(s_id, name.c_str(), config_store::defaultDurationS());
     Serial.printf("[UP] stored IMAGE id=%s bytes=%u name=%s\n", s_id,
                   static_cast<unsigned>(s_image_bytes), name.c_str());
   }
@@ -138,7 +156,7 @@ void handleFinish() {
   if (!ok) {
     cleanup();
     s_server->send(500, "text/plain", "failed to register content");
-    s_id[0] = '\0';
+    finishReset();
     return;
   }
 
@@ -148,7 +166,7 @@ void handleFinish() {
   char json[64];
   snprintf(json, sizeof(json), "{\"id\":\"%s\"}", s_id);
   s_server->send(200, "application/json", json);
-  s_id[0] = '\0';
+  finishReset();
 }
 
 }  // namespace web_upload

@@ -6,6 +6,7 @@
 #include <uri/UriBraces.h>
 
 #include "app_state.h"
+#include "config_store.h"
 #include "content_store.h"
 #include "net_manager.h"
 #include "player.h"
@@ -114,6 +115,29 @@ void handlePlaylistPost() {
   }
 }
 
+void handleConfigGet() {
+  char json[256];
+  if (!config_store::toJson(json, sizeof(json))) {
+    g_server.send(500, "text/plain", "config error");
+    return;
+  }
+  g_server.send(200, "application/json", json);
+}
+
+void handleConfigPost() {
+  if (!g_server.hasArg("plain")) {
+    g_server.send(400, "text/plain", "empty body");
+    return;
+  }
+  const String& body = g_server.arg("plain");
+  if (config_store::applyJson(body.c_str(), body.length())) {
+    player::requestRedraw();
+    g_server.send(200, "text/plain", "updated");
+  } else {
+    g_server.send(400, "text/plain", "invalid config");
+  }
+}
+
 // /api/clear: 全コンテンツを削除。
 void handleClear() {
   const int removed = content_store::clearAll();
@@ -154,6 +178,8 @@ void begin() {
   g_server.on(UriBraces("/api/thumb/{}"), HTTP_GET, handleThumb);
   g_server.on(UriBraces("/api/content/{}"), HTTP_DELETE, handleDelete);
   g_server.on("/api/clear", HTTP_POST, handleClear);
+  g_server.on("/api/config", HTTP_GET, handleConfigGet);
+  g_server.on("/api/config", HTTP_POST, handleConfigPost);
   g_server.on(UriBraces("/api/show/{}"), HTTP_POST, handleShow);
 
   // アップロード(multipart チャンク)。

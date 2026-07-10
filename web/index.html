@@ -97,6 +97,19 @@
       <button id="clearall" style="display:none; background:#5a2230">全削除</button>
     </div>
   </div>
+
+  <div class="card">
+    <h2>設定</h2>
+    <div class="vrow"><label style="width:110px">明るさ</label>
+      <input id="cfg-bright" type="range" min="10" max="255" style="flex:1"></div>
+    <div class="vrow"><label style="width:110px">既定の表示秒数</label>
+      <input id="cfg-dur" type="number" min="1" max="600"></div>
+    <div class="vrow"><label style="width:110px">動画ループ既定</label>
+      <input id="cfg-loops" type="number" min="1"></div>
+    <div class="vrow"><label><input id="cfg-buzz" type="checkbox"> ブザー音</label></div>
+    <div style="margin-top:12px"><button id="cfg-save">設定を保存</button></div>
+    <div id="cfg-status" style="font-size:.85em; color:var(--muted); margin-top:8px"></div>
+  </div>
 </main>
 
 <script>
@@ -399,6 +412,30 @@ async function savePlaylist() {
   });
 }
 
+async function loadConfig() {
+  try {
+    const c = await (await fetch("/api/config")).json();
+    $("cfg-bright").value = c.brightness;
+    $("cfg-dur").value = c.default_duration_s;
+    $("cfg-loops").value = c.default_loops;
+    $("cfg-buzz").checked = !!c.buzzer;
+  } catch {}
+}
+
+$("cfg-save").onclick = async () => {
+  const body = {
+    brightness: parseInt($("cfg-bright").value),
+    default_duration_s: parseInt($("cfg-dur").value),
+    default_loops: parseInt($("cfg-loops").value),
+    buzzer: $("cfg-buzz").checked,
+  };
+  const r = await fetch("/api/config", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  $("cfg-status").textContent = r.ok ? "保存しました" : "保存に失敗しました";
+};
+
 $("file").onchange = e => onPick(e.target.files);
 $("send").onclick = onSend;
 $("clearall").onclick = async () => {
@@ -407,6 +444,7 @@ $("clearall").onclick = async () => {
   await refresh();
 };
 refresh();
+loadConfig();
 </script>
 </body>
 </html>
